@@ -50,7 +50,7 @@ if __name__ == "__main__":
         """
         Allgather example
         """
-
+        # each worker has an array of 2 values
         r = np.random.randint(0, 100, 2)
         rr = np.empty(16, dtype=int)
 

@@ -61,24 +61,31 @@ def get_info(
             An integer corresponds to the output feature dimension after specific parallelism
     """
 
-    """TODO: Your code here"""
-
     # Get the mp_idx, dp_idx from rank, mp_size and dp_size (you may not need to use all three of them)
-
-    ...
+    
+    # mp_idx and dp_idx are defined such that within their dp/mp group, each process has a different rank
+    mp_idx, dp_idx = rank % mp_size, rank // mp_size
 
     # Get the model/data parallel communication groups
     # the model/data parallel communication group is required to apply mpi operations within the scope of the group
     # Hint: try to figure out the relationship between the mp_idx, dp_idx with the mp/dp communication group
     #       and use the comm.Split() function to get the corresponding group.
-
-    ...
+    mp_color, dp_color = rank // mp_size, rank % mp_size
+    mp_comm = comm.Split(key=rank, color=mp_color)
+    dp_comm = comm.Split(key=rank, color=dp_color)
 
     # Derive the part_in_dim and part_out_dim depend on is_fc1 and is_megatron_mp
-
-    ...
-
-    raise NotImplementedError
+    if not is_fc1 and is_megatron_mp: 
+        # in dim gets reduced by model size (splitting horz)
+        part_in_dim = in_dim / mp_size
+        # out_dim stays same when we split horz
+        part_out_dim = out_dim
+    else:
+        # in_dim stays same when we split vertically
+        part_in_dim = in_dim
+        # out dim gets split by number in model group
+        part_out_dim = out_dim / mp_size
+    return (mp_idx, dp_idx, mp_comm, dp_comm, part_in_dim, part_out_dim)
 
 
 def naive_collect_forward_input(
@@ -107,15 +114,21 @@ def naive_collect_forward_input(
     """
 
     """TODO: Your code here"""
+    
+    # need to do an all-gather on each node
+    batch_size, part_in_dim = x.shape
 
     # Note: you may want to ensure that the source variable and destination variable in your mpi func call should
     #       have the same data type, otherwise you will not collect the correct value.
-
+    buffer_x = np.zeros(shape=(mp_size*batch_size, part_in_dim), dtype=x.dtype)
     # Hint: Try to figure out the way MPI calls deal with the destination memory layout for 2d matrix transfer, this might
     #       might not align with your expected layout. In order to get the correct layout, you may wish to use some NumPy
     #       functions (np.split and np.concatenate might be helpful).
-
-    raise NotImplementedError
+    mp_comm.Allgather(x, buffer_x)
+    original_cols = np.split(buffer_x, indices_or_sections=mp_size, axis=0)
+    collected_x = np.concatenate(original_cols, axis=1)
+    return collected_x
+    
 
 
 def naive_collect_forward_output(
@@ -145,9 +158,13 @@ def naive_collect_forward_output(
 
     """TODO: Your code here"""
 
-    # Hint: you might have just implemented something similar ^-^
+    batch_size, part_out_dim = out.shape
 
-    raise NotImplementedError
+    buffer_out = np.zeros(shape=(mp_size*batch_size, part_out_dim), dtype=out.dtype)
+    mp_comm.Allgather(out, buffer_out)
+    original_cols = np.split(buffer_out, mp_size, axis=0)
+    collected_out = np.concatenate(original_cols, axis=1)
+    return collected_out
 
 
 def megatron_collect_forward_input(

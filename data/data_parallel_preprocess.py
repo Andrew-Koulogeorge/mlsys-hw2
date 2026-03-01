@@ -40,10 +40,19 @@ def split_data(
         please split the data uniformly across data parallel groups and
         do not shuffle the index as we will shuffle them later
     """
-
-    """TODO: Your code here"""
-
     # Try to get the correct start_idx and end_idx from dp_size, mp_size and rank and return
     # the corresponding data
+    
+    # assuming index row major order in dp_size x mp_size (row major order increasing along mp_size)
+    
+    n,_ = x_train.shape
+    
+    # assume n % dp_size == 0
+    chunk_size = n // dp_size
 
-    raise NotImplementedError
+    # 0-mp_size-1 -> idx=0
+    idx = rank // mp_size
+
+    x_slice = x_train[idx*chunk_size:(idx+1)*chunk_size, :]
+    y_slice = y_train[idx*chunk_size:(idx+1)*chunk_size]
+    return x_slice, y_slice
