@@ -196,7 +196,7 @@ def megatron_collect_forward_input(
 
     # Hint: you don't need all the input parameters to get the collected_x
 
-    raise NotImplementedError
+    return x
 
 
 def megatron_collect_forward_output(
@@ -228,8 +228,11 @@ def megatron_collect_forward_output(
 
     # Hint: try to work through a toy forward example for megatron-style model parallel to figure out the
     #       the communication functions that you might need
-
-    raise NotImplementedError
+    # out_tim = part_out_dim, no?
+    batch_size, out_dim = out.shape
+    collected_out = np.zeros(shape=(batch_size, out_dim), dtype=out.dtype)
+    mp_comm.Allreduce(out, collected_out)
+    return collected_out
 
 
 def naive_collect_backward_output(
@@ -260,8 +263,8 @@ def naive_collect_backward_output(
     """TODO: Your code here"""
 
     # Hint: you might want to use np.split to get the collected_output_grad for each MP node
-
-    raise NotImplementedError
+    split_output_grad = np.split(output_grad, indices_or_sections=mp_size, axis=1)[mp_group_idx]
+    return split_output_grad
 
 
 def naive_collect_backward_x(
@@ -293,10 +296,18 @@ def naive_collect_backward_x(
 
     # Hint 1: The communication pattern for this function can be seen as the reverse of its forward
     #         , so you might to check the naive_collect_forward_output() impl.
+    batch_size, in_dim = grad_x.shape
+    part_in_dim = in_dim // mp_size
+    collected_grad_x = np.zeros(shape=(batch_size, part_in_dim), dtype=grad_x.dtype)
+    
+    # split and place grad_xs into row major order for reduce scatter
+    split_grad_cols = np.split(grad_x, indices_or_sections=mp_size, axis=1)
+    row_major_grad_x = np.concatenate(split_grad_cols, axis=0)
+    mp_comm.Reduce_scatter(row_major_grad_x, collected_grad_x)
 
     # Hint 2: You might want to use reduce_scatter
 
-    raise NotImplementedError
+    return collected_grad_x
 
 
 def megatron_collect_backward_output(
@@ -328,7 +339,7 @@ def megatron_collect_backward_output(
 
     # Hint: your implementation should be within one line of code
 
-    raise NotImplementedError
+    return output_grad
 
 
 def megatron_collect_backward_x(
@@ -359,8 +370,7 @@ def megatron_collect_backward_x(
     """TODO: Your code here"""
 
     # Hint: your implementation should be within one line of code
-
-    raise NotImplementedError
+    return grad_x
 
 
 def collect_weight_grad(
@@ -392,7 +402,10 @@ def collect_weight_grad(
     """
 
     """TODO: Your code here"""
-
+    in_dim, out_dim = grad_w.shape
+    collected_grad_w = np.zeros(shape=(in_dim, out_dim), dtype=grad_w.dtype)
+    collected_grad_b = np.zeros(shape=(1, out_dim), dtype=grad_b.dtype)
     # Hint: Think about how you might want to aggregate the gradients from different nodes in data parallel training
-
-    raise NotImplementedError
+    dp_comm.Allreduce(grad_w, collected_grad_w)
+    dp_comm.Allreduce(grad_b, collected_grad_b)
+    return collected_grad_w/dp_comm.Get_size(), collected_grad_b/dp_comm.Get_size()
