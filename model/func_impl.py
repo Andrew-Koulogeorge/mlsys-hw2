@@ -77,14 +77,14 @@ def get_info(
     # Derive the part_in_dim and part_out_dim depend on is_fc1 and is_megatron_mp
     if not is_fc1 and is_megatron_mp: 
         # in dim gets reduced by model size (splitting horz)
-        part_in_dim = in_dim / mp_size
+        part_in_dim = in_dim // mp_size
         # out_dim stays same when we split horz
         part_out_dim = out_dim
     else:
         # in_dim stays same when we split vertically
         part_in_dim = in_dim
         # out dim gets split by number in model group
-        part_out_dim = out_dim / mp_size
+        part_out_dim = out_dim // mp_size
     return (mp_idx, dp_idx, mp_comm, dp_comm, part_in_dim, part_out_dim)
 
 
