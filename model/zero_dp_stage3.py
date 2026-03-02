@@ -107,7 +107,8 @@ class ZeroDPStage3FCLayer(object):
         """
         N = np.size(tensor)
         shard_size = (N + num_shards - 1) // num_shards
-        padded_flat_tensor = np.zeros(shape=(N*shard_size,), dtype=tensor.dtype)
+        padded_flat_tensor = np.zeros(shape=(num_shards*shard_size,), dtype=tensor.dtype)
+        # padded_flat_tensor = np.zeros(shape=(N*shard_size,), dtype=tensor.dtype) # incorrect
         padded_flat_tensor[:N] = tensor.flatten()
         padded_flat_tensor_shard = padded_flat_tensor[shard_size*shard_idx:shard_size*(shard_idx+1)]
         return (padded_flat_tensor_shard, shard_size)
@@ -135,12 +136,30 @@ class ZeroDPStage3FCLayer(object):
             1) All-gather weights.
             2) Compute FC output.
         """
-        self.x = x
+        self.x = x # saved for backprop!
 
         """TODO: Your code here"""
-
-
-        raise NotImplementedError
+        
+        # init buffers that can store padded parameters from this module
+        w_buffer = np.zeros(shape=(self.w_shard_size*self.dp_size,), dtype=self.w_shard.dtype)
+        b_buffer = np.zeros(shape=(self.b_shard_size*self.dp_size,), dtype=self.b_shard.dtype)
+        # communicate local shard (as a flat buffer) to all other devices
+        self.comm.Allgather(self.w_shard, w_buffer)
+        # print(f"x dtype: {self.x.dtype}\n")
+        # print(f"b shard dtype: {self.b_shard.dtype}\n")
+        # print(f"b buffer dtype: {b_buffer.dtype}\n")
+        # print(f"b_shard: {self.b_shard}\n")
+        # print(f"b_buffer: {b_buffer}\n")
+        # print(f"b_shard_size: {self.b_shard_size}\n")
+        # print(f"dp size: {self.dp_size}\n")
+        # print(f"process rank: {self.comm.Get_rank()}\n")
+        self.comm.Allgather(self.b_shard, b_buffer) # MPI_ERR_TRUNCATE: message truncated
+        # discard padded elements and reshape to be original size
+        w = w_buffer[:self.w_numel].reshape(self.in_dim, self.out_dim)
+        b = b_buffer[:self.b_numel]
+        # perform computation
+        y = self.x @ w + b
+        return y
 
     def backward(self, output_grad: np.ndarray) -> List[np.ndarray]:
         """Backward pass under ZeRO-DP Stage 3.
@@ -173,10 +192,32 @@ class ZeroDPStage3FCLayer(object):
             The autograder will call this method and expect the gradients to be populated in 
             these attributes for the optimizer step.
         """
+        # reconstruct full paramaters
+        w_buffer = np.zeros(shape=(self.w_shard_size*self.dp_size,), dtype=self.w_shard.dtype)
+        # communicate local shard (as a flat buffer) to all other devices
+        assert self.w_shard.size*self.dp_size == w_buffer.size, "failed check 1"
+        self.comm.Allgather(self.w_shard, w_buffer)
+        # discard padded elements and reshape to be original size
+        w = w_buffer[:self.w_numel].reshape(self.in_dim, self.out_dim)
+        
+        
+        # compute full local gradients for this data batch
+        w_grad = self.x.T @ output_grad # in x b | b x out = in x out
+        b_grad = np.sum(output_grad, axis=0) # out
+        
+        # flatten and pad these gradients 
+        w_grad_buffer = np.zeros(shape=(self.w_shard_size*self.dp_size,), dtype=self.w_shard.dtype)
+        b_grad_buffer = np.zeros(shape=(self.b_shard_size*self.dp_size,), dtype=self.b_shard.dtype)
+        w_grad_buffer[:self.w_numel] = w_grad.flatten()
+        b_grad_buffer[:self.b_numel] = b_grad
+        
+        # update gradients in place (averaging gradients across batch)
+        self.comm.Reduce_scatter(w_grad_buffer, self.grad_w_shard)
+        self.comm.Reduce_scatter(b_grad_buffer, self.grad_b_shard)
 
-        """TODO: Your code here"""
-
-        raise NotImplementedError
+        # compute gradient of output w.r.t activation for this data batch
+        grad_x = output_grad @ w.T
+        return [grad_x]
 
 
 class ZeroDPMLPModel(object):
@@ -310,6 +351,10 @@ class ZeroDPAdam(object):
                     "v": np.zeros_like(param),
                 }
 
-            """TODO: Your code here"""
-
-        raise NotImplementedError
+            m, v = self.state[key]["m"], self.state[key]["v"]
+            m = self.beta1*m + (1 - self.beta1)*grad
+            v = self.beta2*v + (1 - self.beta2)*(grad*grad)
+            m_hat = m / (1 - self.beta1**self.step_idx)
+            v_hat = v / (1 - self.beta2**self.step_idx)
+            param -= self.lr*(m_hat / (np.sqrt(v_hat) + self.eps))
+            self.state[key]["m"], self.state[key]["v"] = m, v 
