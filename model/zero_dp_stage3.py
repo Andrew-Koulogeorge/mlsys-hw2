@@ -105,16 +105,12 @@ class ZeroDPStage3FCLayer(object):
             shard_size : int
                 the number of elements in each shard **including padding**.
         """
-
-        """TODO: Your code here"""
-
-        # Hint: You need to handle the case when tensor.numel() is not divisible by 
-        # num_shards by padding zeros at the end of the flattened tensor before 
-        # partitioning. The returned shard should INCLUDE the padded elements.
-        # We keep track of the original shard_size (without padding) for
-        # later use in communication.
-
-        return (np.empty(8), 8)
+        N = np.size(tensor)
+        shard_size = (N + num_shards - 1) // num_shards
+        padded_flat_tensor = np.zeros(shape=(N*shard_size,), dtype=tensor.dtype)
+        padded_flat_tensor[:N] = tensor.flatten()
+        padded_flat_tensor_shard = padded_flat_tensor[shard_size*shard_idx:shard_size*(shard_idx+1)]
+        return (padded_flat_tensor_shard, shard_size)
 
     def zero_grad(self):
         self.grad_w_shard = np.zeros_like(self.w_shard)
